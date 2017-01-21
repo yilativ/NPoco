@@ -98,7 +98,7 @@ namespace NPoco.Expressions
         }
 
         private string sep = string.Empty;
-        private char EscapeChar = '\\';
+        protected string EscapeChar = "\\";
         private PocoData _pocoData;
         private readonly IDatabase _database;
         private readonly DatabaseType _databaseType;
@@ -909,12 +909,22 @@ namespace NPoco.Expressions
                 else
                     left = Visit(b.Left);
 
+                if (left as NullableMemberAccess != null)
+                {
+                    left = new PartialSqlString("(" + left + " is not null)");
+                }
+
                 m = b.Right as MemberExpression;
                 if (m != null && m.Expression != null
                     && m.Expression.NodeType == ExpressionType.Parameter)
                     right = new PartialSqlString(string.Format("{0} = {1}", VisitMemberAccess(m), GetQuotedTrueValue()));
                 else
                     right = Visit(b.Right);
+
+                if (right as NullableMemberAccess != null)
+                {
+                    right = new PartialSqlString("(" + right + " is not null)");
+                }
 
                 if (left as PartialSqlString == null && right as PartialSqlString == null)
                 {
@@ -1327,10 +1337,10 @@ namespace NPoco.Expressions
             }
         }
 
-        private StringBuilder FlattenList(IEnumerable inArgs, object partialSqlString)
+        private StringBuilder FlattenList(List<object> inArgs, object partialSqlString)
         {
-            StringBuilder sIn = new StringBuilder();
-            foreach (Object e in inArgs)
+            var sIn = new StringBuilder();
+            foreach (object e in inArgs)
             {
                 if (!typeof(ICollection).IsAssignableFrom(e.GetType()))
                 {
@@ -1339,8 +1349,7 @@ namespace NPoco.Expressions
                 }
                 else
                 {
-                    var listArgs = e as ICollection;
-                    foreach (Object el in listArgs)
+                    foreach (object el in (ICollection)e)
                     {
                         var v = FormatParameters(partialSqlString, el);
                         sIn.AppendFormat("{0}{1}", sIn.Length > 0 ? "," : "", CreateParam(v));
@@ -1348,10 +1357,6 @@ namespace NPoco.Expressions
                 }
             }
 
-            if (sIn.Length == 0)
-            {
-                sIn.AppendFormat("select 1 /*poco_dual*/ where 1 = 0");
-            }
             return sIn;
         }
 
@@ -1538,7 +1543,6 @@ namespace NPoco.Expressions
 
         private string BuildInStatement(Expression m, object quotedColName)
         {
-            string statement;
             var member = Expression.Convert(m, typeof(object));
             var lambda = Expression.Lambda<Func<object>>(member);
             var getter = lambda.Compile();
@@ -1546,11 +1550,14 @@ namespace NPoco.Expressions
             if (quotedColName == null)
                 quotedColName = Visit(m);
 
-            var inArgs = getter() as IEnumerable;
+            var inArgs = ((IEnumerable) getter()).Cast<object>().ToList();
+            if (inArgs.Count == 0)
+            {
+                return "1 = 0";
+            }
 
             var sIn = FlattenList(inArgs, quotedColName);
-
-            statement = string.Format("{0} {1} ({2})", quotedColName, "IN", sIn);
+            var statement = string.Format("{0} {1} ({2})", quotedColName, "IN", sIn);
             return statement;
         }
 
@@ -1644,7 +1651,8 @@ namespace NPoco.Expressions
         protected virtual string EscapeParam(object par)
         {
             var param = par.ToString().ToUpper();
-            param = param.Replace(EscapeChar.ToString(), EscapeChar.ToString() + EscapeChar)
+            param = param
+                .Replace(EscapeChar, EscapeChar + EscapeChar)
                 .Replace("_", EscapeChar + "_");
             return param;
         }
